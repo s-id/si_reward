@@ -1,0 +1,369 @@
+<?php
+
+/**
+ * Implements hook_menu().
+ */
+
+function si_reward_menu() {
+
+  $items['stat-page'] = array(
+    'title' => t('Statistics'),
+    'description' => 'My custom and very special page',
+    'page callback' => '_si_reward_stat_page',
+    // 'access callback' => 'user_access',
+    'access arguments' => array('access si_reward content'),
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_permission().
+ */
+function si_reward_permission() {
+  return array(
+    'access si_reward content' => array(
+      'title' => t('Access content for the SI Reward module'),
+    ),
+    'access si_reward settings' => array(
+      'title' => t('Access settings for the SI Reward module'),
+    )
+  );
+}
+
+/**
+ * Implements hook_block_info().
+ */
+function si_reward_block_info() {
+  $blocks = array();
+  $blocks['editors'] = array(
+    'info' => t('Editors stats'),
+  );
+
+  return $blocks;
+}
+
+function si_reward_block_view($delta='') {
+  $block = array();
+
+  switch($delta) {
+    case 'editors' :
+      $block['content'] = _si_block_view();
+      break;
+  }
+
+  return $block;
+}
+
+function _si_block_view() {
+  $now = time();
+  $start_today = strtotime('midnight', $now);
+  $start_month = strtotime('first day of this month 00:00:00', $now);
+  $dates = array($start_today, $now);
+  $day_stat =_get_block_stat($dates);
+  $dates = array($start_month, $now);
+  $block_users_stat = _get_block_stat($dates);
+
+  $total_stat = array('day_nodes' => 0, 'day_views' => 0, 'month_nodes' => 0, 'month_views' => 0, );
+
+  foreach ($block_users_stat as $key => $stat) {
+    if (isset($day_stat[$key])) {
+      $stat->day_views = $day_stat[$key]->views;
+      $stat->day_nodes = $day_stat[$key]->nodes;
+      $total_stat['day_nodes'] += $day_stat[$key]->nodes;
+      $total_stat['day_views'] += $day_stat[$key]->views;
+    }
+    else {
+      $stat->day_views = 0;
+      $stat->day_nodes = 0;
+    }
+    $stat->name = user_load($stat->uid)->name;
+    $stat->access = user_load($stat->uid)->access;
+    $stat->access_human = date("d.m.Y H:i", user_load($stat->uid)->access);
+    if ($stat->access < ($now - 259200)) $stat->active = FALSE;
+    else $stat->active = TRUE;
+    if ($stat->access > ($now - 900)) $stat->status = 'online';
+    else $stat->status = 'offline';
+    $total_stat['month_nodes'] += $stat->nodes;
+    $total_stat['month_views'] += $stat->views;
+  }
+
+  dpm($day_stat);
+  dpm($block_users_stat);
+  dpm($total_stat);
+
+
+  $output = t('Editors\' activity');
+
+  foreach ($block_users_stat as $key => $stat) {
+    if ($stat->active == TRUE) {
+      $output .= '<div class="user-info">';
+      $output .= '<div class="user-' . $stat->status . '"><div>' . $stat->name . '</div><div class="user-access"> (' . $stat->access_human . ')</div></div>';
+      $output .= '<div class="day-stat"><div class="nodes">' . $stat->day_nodes . '</div><div class="day-views">' . $stat->day_views . '</div></div>';
+      $output .= '<div class="month-stat"><div class="nodes">' . $stat->nodes . '</div><div class="day-views">' . $stat->views . '</div></div>';
+      $output .= '</div>';
+    }
+  }
+
+  $output .= '<div class="user-info">';
+  $output .= '<a href="/stat-page" class="total-title">Всего материалов за сегодня/месяц и количество их просмотров за сегодня</a>';
+  $output .= '<div class="day-stat"><div class="nodes">' . $total_stat['day_nodes'] . '</div><div class="day-views">' . $total_stat['day_views'] . '</div></div>';
+  $output .= '<div class="month-stat"><div class="nodes">' . $total_stat['month_nodes'] . '</div><div class="day-views">' . $total_stat['month_views'] . '</div></div>';
+  $output .= '</div>';
+
+
+
+  return $output;
+}
+
+function _get_block_stat($dates) {
+  $queryUserStats = db_select('node', 'n')
+    ->fields('n', array('uid'))
+    ->condition('n.created', $dates, 'BETWEEN')
+    ->groupBy('n.uid');
+  $queryUserStats->innerJoin('sky_stat', 's', 'n.nid = s.nid');
+  $queryUserStats->addExpression('sum(s.daycount)', 'views');
+  $queryUserStats->addExpression('COUNT(n.nid)', 'nodes');
+  $userStats = $queryUserStats->execute()->fetchAllAssoc('uid');
+  return $userStats;
+}
+
+function _si_reward_stat_page() {
+  $time_start = microtime(TRUE);
+  $stats = _si_reward_get_stats();
+
+//  dpm($stats);
+
+  $commonStats = $stats['common_stats'];
+  $userStats = $stats['users_stats'];
+  $output = '';
+
+  $output .= '<p>' . '<strong>Общий бюджет редакторов:</strong> ' . $commonStats['editors_reward'] . ' грн.</p>';
+  $output .= '<p>' . '<strong>Материалов за период, всего:</strong> ' . $commonStats['totalNodes'] . '</p>';
+  $output .= '<p>' . '<strong>Просмотров за период, всего:</strong> ' . $commonStats['totalViews'] . '</p>';
+  $output .= '<p>' . '<strong>Стоимость за 1 материал:</strong> ' . $commonStats['reward_per_node'] . ' грн.</p>';
+  $output .= '<p>' . '<strong>Стоимость за 1000 просмотров:</strong> ' . $commonStats['reward_per_1000view'] . ' грн.</p>';
+
+  foreach ($userStats as $key => $stat) {
+    $output .= '<hr />';
+    $output .= '<p><strong>' . $stat->name . '</strong></p>';
+    $output .= '<p>Среднее количество просмотров одного материала: ' . $stat->average_node_views . '</p>';
+    $output .= '<p>Среднее количество материалов в день: ' . $stat->average_nodes_day . '</p>';
+    $output .= '<ul>';
+    $output .= '<li>Материалов: ' . $stat->nodecount . '</li>';
+    $output .= '<li>Просмотров: ' . $stat->monthviews . '</li>';
+    $output .= '<li>Заработано за материалы: ' . $stat->nodes_reward . ' грн.</li>';
+    $output .= '<li>Заработано за просмотры: ' . $stat->views_reward . ' грн.</li>';
+    $output .= '<li>Заработано всего: ' . $stat->user_reward . ' грн.</li>';
+    $output .= '</ul>';
+  }
+  $time_end = microtime(TRUE);
+  $execution_time = ($time_end - $time_start);
+
+  $output .= '<hr /><p><small>Статистика показывает примерный порядок сумм и цифр и может меняться в зависимости от времени, посещаемости сайта, курса валют и т.д.</small></p>';
+  $output .= '<p><small>Актуальность финансовых данных на: ' . date("H:i, d.m.Y", $commonStats['update_time']) . '</small></p>';
+
+  drupal_set_title("Статистика за " . date("d.m.Y  H:i", $commonStats['start_date']) . ' — ' . date("d.m.Y H:i", $commonStats['end_date']));
+
+
+  global $user;
+
+  if (in_array('administrator', $user->roles) || in_array('owner', $user->roles)) :
+
+    $output .= '<hr />';
+    $output .= '<p><small>Общий доход: ' . $commonStats['total_reward'] . ' грн. (Adsense - ' . $commonStats['google_eur'] . ' евро, РСЯ - ' . $commonStats['yandex_rub'] . ' руб.)</small></p>';
+    $output .= '<p><small>Доход на одного владельца: ' . round(($commonStats['owners_reward']) / 3, 2) . ' грн.</small></p>';
+    $output .= '<p><small>Курсы валют: Евро - ' . $commonStats['eur'] . ', Рубль - ' . $commonStats['rub'] . '</small></p>';
+    $output .= '<p><small>Выполнено за время (грубо): ' . $execution_time . ' сек.</small></p>';
+  endif;
+
+  return $output;
+}
+
+function _si_reward_get_stats() {
+  $commonStats = array();
+  $exchange_rates = _si_reward_get_exchange_rates();
+//  $statDate = strtotime('October 2016');
+  $statDate = time();
+  $commonStats['start_date'] = strtotime('first day of this month 00:00:00', $statDate);
+//  $commonStats['end_date'] = strtotime('first day of next month 00:00:00', $statDate);
+  $commonStats['end_date'] = $statDate;
+  $commonStats['dates'] = array(
+    'start_date' => $commonStats['start_date'],
+    'end_date' => $commonStats['end_date']
+  );
+  $commonStats['total_days'] = round(($commonStats['end_date'] - $commonStats['start_date']) / 86400);
+  $commonStats['eur'] = $exchange_rates['eur'];
+  $commonStats['rub'] = $exchange_rates['rub'];
+  $commonStats['update_time'] = variable_get("dp_helper_last_update");
+  $commonStats['editor_owner_ratio'] = variable_get("dp_helper_coeff_1");
+  $commonStats['nodes_views_ratio'] = variable_get("dp_helper_coeff_2");
+  $commonStats['yandex_rub'] = variable_get("dp_helper_reward_yandex");
+  $commonStats['yandex_uah'] = round($commonStats['yandex_rub'] * $commonStats['rub'], 2);
+  $commonStats['google_eur'] = _si_reward_adsense($commonStats['dates']);
+  $commonStats['google_uah'] = round($commonStats['google_eur'] * $commonStats['eur'], 2);
+  $commonStats['total_reward'] = $commonStats['google_uah'] + $commonStats['yandex_uah'];
+  $commonStats['editors_reward'] = round($commonStats['total_reward'] * $commonStats['editor_owner_ratio'], 2);
+  $commonStats['owners_reward'] = round($commonStats['total_reward'] - $commonStats['editors_reward'], 2);
+  $commonStats['nodes_reward'] = round($commonStats['editors_reward'] * $commonStats['nodes_views_ratio'], 2);
+  $commonStats['views_reward'] = round($commonStats['editors_reward'] - $commonStats['nodes_reward'], 2);
+  $commonStats['totalNodes'] = 0;
+  $commonStats['totalViews'] = 0;
+
+  $queryUserStats = db_select('node', 'n')
+    ->fields('n', array('uid'))
+    ->condition('n.created', $commonStats['dates'], 'BETWEEN')
+    ->groupBy('n.uid');
+  $queryUserStats->innerJoin('sky_stat', 's', 'n.nid = s.nid');
+  $queryUserStats->addExpression('sum(s.monthcount)', 'monthviews');
+  $queryUserStats->addExpression('COUNT(n.nid)', 'nodecount');
+  $userStats = $queryUserStats->execute()->fetchAllAssoc('uid');
+
+  foreach ($userStats as $key => $stat) {
+    $commonStats['totalNodes'] += $stat->nodecount;
+    $commonStats['totalViews'] += $stat->monthviews;
+  }
+
+  $commonStats['reward_per_node'] = round((($commonStats['totalNodes'] === 0) ? '0' : $commonStats['nodes_reward'] / $commonStats['totalNodes']), 2);
+  $commonStats['reward_per_1000view'] = round((($commonStats['totalViews'] === 0) ? '0' : $commonStats['views_reward'] / $commonStats['totalViews']) * 1000, 2);
+
+  foreach ($userStats as $key => $stat) {
+    $stat->name = user_load($stat->uid)->name;
+    $stat->average_node_views = round($stat->monthviews / $stat->nodecount);
+    $stat->average_nodes_day = round($stat->nodecount / $commonStats['total_days']);
+    $stat->nodes_reward = $stat->nodecount * $commonStats['reward_per_node'];
+    $stat->views_reward = round($stat->monthviews * $commonStats['reward_per_1000view'] / 1000, 2);
+    $stat->user_reward = $stat->nodes_reward + $stat->views_reward;
+  }
+
+  return ['common_stats' => $commonStats, 'users_stats' => $userStats];
+}
+
+
+function _si_reward_get_exchange_rates() {
+  $exchangeRates = array();
+  $helperExchangeRates = array();
+
+  $json = file_get_contents('https://api.privatbank.ua/p24api/pubinfo?exchange&json&coursid=11');
+  $exchangeRatesData = json_decode($json, TRUE);
+
+  foreach ($exchangeRatesData as $item) {
+    $helperExchangeRates[$item['ccy']]['buy'] = $item['buy'];
+  }
+
+  $exchangeRates['eur'] = $helperExchangeRates['EUR']['buy'];
+  $exchangeRates['rub'] = $helperExchangeRates['RUR']['buy'];
+
+  return $exchangeRates;
+}
+
+function _si_reward_adsense($dates) {
+//  return 20; // for test
+
+  $client_id = '308406826408-958qpkr7bmpq3t9hm735pd15l62htiv8.apps.googleusercontent.com';
+//  $client_secret = 'EF92IQWnAvZn2MUE50mnW6cf';
+  $client_secret = 'cE1xfcSkaK1PmxtpdY0uWJ16';
+  $redirect_uri = 'http://donpress.com/stat-page';
+  $output = '';
+
+  $library_path = libraries_get_path('google');
+
+  require_once $library_path . '/autoload.php';
+  require_once $library_path . '/Client.php';
+  require_once $library_path . '/Service/AdSense.php';
+
+  // Configure token storage on disk.
+  // If you want to store refresh tokens in a local disk file, set this to true.
+  define('STORE_ON_DISK', TRUE, TRUE);
+  define('TOKEN_FILENAME', 'tokens.dat', TRUE);
+
+  // Set up authentication.
+  $client = new Google_Client();
+  $client->setClientId($client_id);
+  $client->setClientSecret($client_secret);
+  $client->setRedirectUri($redirect_uri);
+  $client->addScope('https://www.googleapis.com/auth/adsense.readonly');
+  $client->setAccessType('offline');
+
+  // Create service.
+  $service = new Google_Service_AdSense($client);
+
+  // If we're logging out we just need to clear our local access token.
+  // Note that this only logs you out of the session. If STORE_ON_DISK is
+  // enabled and you want to remove stored data, delete the file.
+  if (isset($_REQUEST['logout'])) {
+    unset($_SESSION['access_token']);
+  }
+
+  // If we have a code back from the OAuth 2.0 flow, we need to exchange that
+  // with the authenticate() function. We store the resultant access token
+  // bundle in the session (and disk, if enabled), and redirect to this page.
+  if (isset($_GET['code'])) {
+    $client->authenticate($_GET['code']);
+    // Note that "getAccessToken" actually retrieves both the access and refresh
+    // tokens, assuming both are available.
+    $_SESSION['access_token'] = $client->getAccessToken();
+    if (STORE_ON_DISK) {
+      file_put_contents(TOKEN_FILENAME, $_SESSION['access_token']);
+    }
+    $redirect = 'http://' . $_SERVER['HTTP_HOST'] . $_SERVER['PHP_SELF'];
+    header('Location: ' . filter_var($redirect, FILTER_SANITIZE_URL));
+    exit;
+  }
+
+  // If we have an access token, we can make requests, else we generate an
+  // authentication URL.
+  if (isset($_SESSION['access_token']) && $_SESSION['access_token']) {
+    $client->setAccessToken($_SESSION['access_token']);
+  }
+  else {
+    if (STORE_ON_DISK && file_exists(TOKEN_FILENAME) &&
+      filesize(TOKEN_FILENAME) > 0
+    ) {
+      // Note that "setAccessToken" actually sets both the access and refresh token,
+      // assuming both were saved.
+      $client->setAccessToken(file_get_contents(TOKEN_FILENAME));
+      $_SESSION['access_token'] = $client->getAccessToken();
+    }
+    else {
+      // If we're doing disk storage, generate a URL that forces user approval.
+      // This is the only way to guarantee we get back a refresh token.
+      if (STORE_ON_DISK) {
+        $client->setApprovalPrompt('force');
+      }
+      $authUrl = $client->createAuthUrl();
+    }
+  }
+
+  if (isset($authUrl)) {
+    $output .= '<a class="login" href="' . $authUrl . '">Connect Me!</a>';
+  }
+  else {
+    //echo '<a class="logout" href="?logout">Logout</a>';
+    echo '';
+  };
+
+  if ($client->getAccessToken()) {
+    $startDate = date("Y-m-d", $dates['start_date']); //'startOfMonth';
+    $endDate = date("Y-m-d", $dates['end_date']);
+    $optParams = array(
+      'metric' => array(
+        'EARNINGS'
+      ),
+      'useTimezoneReporting' => TRUE,
+      'filter' => array(
+        'URL_CHANNEL_NAME==' . "donpress.com"
+      )
+    );
+
+    $results = $service->accounts_reports->generate("pub-4318230466334591", $startDate, $endDate, $optParams);
+    foreach ($results->rows as $result) {
+      $output .= $result[0];
+    }
+
+    $_SESSION['access_token'] = $client->getAccessToken();
+  }
+
+  return $output;
+
+}

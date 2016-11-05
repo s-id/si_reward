@@ -1,0 +1,6 @@
+name = SI Reward module
+description = Count reward for editors and owners
+
+core = 7.x
+
+files[] = si_reward.module
